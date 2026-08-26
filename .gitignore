@@ -1,0 +1,15 @@
+# Répertoires de build
+build/
+cmake-build-*/
+out/
+
+# IDE
+.vscode/
+.idea/
+*.xcodeproj
+*.xcworkspace
+compile_commands.json
+.cache/
+
+# macOS
+.DS_Store
