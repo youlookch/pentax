@@ -1,6 +1,28 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 #include "MainComponent.h"
 
+#if JUCE_MAC
+ #include <cstdlib>
+
+// Lorsque l'application est distribuée en .dmg, les drivers de libgphoto2
+// (camlibs/iolibs) sont embarqués dans le bundle par scripts/make_dmg.sh.
+// libgphoto2 les localise via les variables d'environnement CAMLIBS/IOLIBS,
+// qui doivent être posées avant toute initialisation de la librairie.
+static void useBundledGPhotoDriversIfPresent()
+{
+    const auto resources = juce::File::getSpecialLocation (juce::File::currentApplicationFile)
+                               .getChildFile ("Contents/Resources");
+    const auto camlibs = resources.getChildFile ("camlibs");
+    const auto iolibs  = resources.getChildFile ("iolibs");
+
+    if (camlibs.isDirectory())
+        ::setenv ("CAMLIBS", camlibs.getFullPathName().toRawUTF8(), 0);
+
+    if (iolibs.isDirectory())
+        ::setenv ("IOLIBS", iolibs.getFullPathName().toRawUTF8(), 0);
+}
+#endif
+
 //==============================================================================
 class PentaxTetherApplication : public juce::JUCEApplication
 {
@@ -11,6 +33,10 @@ public:
 
     void initialise (const juce::String&) override
     {
+       #if JUCE_MAC
+        useBundledGPhotoDriversIfPresent();
+       #endif
+
         mainWindow = std::make_unique<MainWindow> (getApplicationName());
     }
 
@@ -37,7 +63,7 @@ public:
             setUsingNativeTitleBar (true);
             setContentOwned (new MainComponent(), true);
             setResizable (true, true);
-            setResizeLimits (520, 400, 1600, 1200);
+            setResizeLimits (760, 480, 2400, 1600);
             centreWithSize (getWidth(), getHeight());
             setVisible (true);
         }

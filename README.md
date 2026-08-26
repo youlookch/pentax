@@ -10,6 +10,8 @@ pensée pour remplacer *Image Transmitter 2* avec une latence minimale.
   l'appareil et écrit **directement sur le disque** (zéro tampon intermédiaire
   en RAM), sans nécessiter de carte SD.
 - **Stabilité** : reconnexion automatique si le câble est débranché/rebranché.
+- **Aperçu intégré** : flux **Live View** de l'appareil
+  (`gp_camera_capture_preview`) et affichage de la dernière photo capturée.
 
 Stack : **C++17 · JUCE 8 · libgphoto2** — compilable sur **macOS** (clang) et
 **Windows** (MinGW-w64 / MSYS2, voir plus bas pourquoi pas MSVC).
@@ -63,6 +65,12 @@ Points clés pour la latence :
    débranchement (retour d'erreur I/O) et bascule en mode reconnexion (retente
    toutes les 2 s) ; elle récupère aussi les photos déclenchées depuis le
    boîtier (`GP_EVENT_FILE_ADDED`).
+5. **Live View** — quand il est activé, le thread USB enchaîne les trames
+   `gp_camera_capture_preview` (JPEG basse résolution, décodé hors du message
+   thread) ; le déclenchement garde la priorité sur le flux, et un poll
+   d'événements ultra-court entre les trames préserve la détection de
+   débranchement. Si le driver de l'appareil ne fournit pas d'aperçu, le flux
+   se coupe proprement avec un message dans le journal.
 
 ### Réglage de l'appareil
 
@@ -87,6 +95,26 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 open "build/PentaxTether_artefacts/Release/Pentax 645Z Tether.app"
 ```
+
+#### Créer le DMG (distribution macOS)
+
+```bash
+brew install dylibbundler        # en plus des dépendances ci-dessus
+./scripts/make_dmg.sh            # -> dist/PentaxTether-1.0.0.dmg
+```
+
+Le script compile en Release puis rend le bundle **autonome** : les dylibs
+(libgphoto2, libgphoto2_port, libusb, …) sont recopiées dans
+`Contents/Frameworks` avec réécriture des chemins de liaison
+(`dylibbundler`), et les drivers `camlibs/`/`iolibs/` sont embarqués dans
+`Contents/Resources` (l'app les localise au démarrage via `CAMLIBS`/`IOLIBS`,
+voir `Source/Main.cpp`). Le DMG fonctionne donc sur un Mac **sans Homebrew**.
+La signature est ad-hoc : pour distribuer hors de votre machine sans
+avertissement Gatekeeper, re-signez avec votre Developer ID puis notarisez.
+
+Le workflow GitHub Actions `.github/workflows/build-dmg.yml` produit ce même
+DMG sur un runner macOS à chaque push (artefact `PentaxTether-dmg` dans
+l'onglet *Actions*).
 
 > **Si l'appareil n'est pas détecté sur macOS** : le démon système
 > `ptpcamerad` (ou l'app Photos/Transfert d'images) peut monopoliser
@@ -141,6 +169,9 @@ cmake --build build
 2. Choisir le **dossier cible** (par défaut : `Images/Pentax645Z`).
 3. Cliquer **DÉCLENCHER** (ou appuyer sur la **barre d'espace**) : l'obturateur
    part, puis le fichier apparaît dans le dossier cible et dans le journal.
+   La photo capturée s'affiche dans le panneau d'aperçu (JPEG ; les RAW seuls
+   ne sont pas décodables par l'aperçu).
+   Cocher **Live View** pour afficher le flux vidéo temps réel de l'appareil.
 4. Les photos prises **depuis le boîtier** sont également rapatriées
    automatiquement.
 5. En cas de câble débranché, l'application repasse en « Déconnecté » et se

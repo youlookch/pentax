@@ -43,12 +43,32 @@ MainComponent::MainComponent()
     logView.setFont (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 13.0f, juce::Font::plain));
     addAndMakeVisible (logView);
 
+    previewView.setImagePlacement (juce::RectanglePlacement::centred
+                                       | juce::RectanglePlacement::onlyReduceInSize);
+    addAndMakeVisible (previewView);
+
+    liveViewToggle.setButtonText (utf8 ("Live View"));
+    liveViewToggle.onClick = [this]
+    {
+        controller.setLiveViewEnabled (liveViewToggle.getToggleState());
+        previewCaption.setText (liveViewToggle.getToggleState()
+                                    ? utf8 ("Live View")
+                                    : utf8 ("Aperçu"),
+                                juce::dontSendNotification);
+    };
+    addAndMakeVisible (liveViewToggle);
+
+    previewCaption.setText (utf8 ("Aperçu"), juce::dontSendNotification);
+    previewCaption.setFont (juce::FontOptions (14.0f, juce::Font::bold));
+    previewCaption.setJustificationType (juce::Justification::centredLeft);
+    addAndMakeVisible (previewCaption);
+
     appendLog (utf8 ("En attente de l'appareil. Branchez le 645Z en USB (mode PTP) et allumez-le."));
 
     controller.addListener (this);
     controller.start();
 
-    setSize (640, 480);
+    setSize (1000, 620);
 }
 
 MainComponent::~MainComponent()
@@ -66,6 +86,20 @@ void MainComponent::paint (juce::Graphics& g)
     g.fillEllipse (statusLedArea);
     g.setColour (juce::Colours::white.withAlpha (0.4f));
     g.drawEllipse (statusLedArea, 1.0f);
+
+    // Fond de la zone d'aperçu
+    g.setColour (juce::Colours::black.withAlpha (0.55f));
+    g.fillRoundedRectangle (previewArea.toFloat(), 6.0f);
+    g.setColour (juce::Colours::white.withAlpha (0.15f));
+    g.drawRoundedRectangle (previewArea.toFloat(), 6.0f, 1.0f);
+
+    if (previewView.getImage().isNull())
+    {
+        g.setColour (juce::Colours::white.withAlpha (0.35f));
+        g.setFont (juce::FontOptions (15.0f));
+        g.drawText (utf8 ("Aucune image — activez le Live View ou déclenchez une photo"),
+                    previewArea, juce::Justification::centred);
+    }
 }
 
 void MainComponent::resized()
@@ -80,16 +114,28 @@ void MainComponent::resized()
     statusLabel.setBounds (statusRow);
     area.removeFromTop (16);
 
-    triggerButton.setBounds (area.removeFromTop (72).reduced (40, 0));
-    area.removeFromTop (16);
+    // Colonne de gauche : contrôles + journal. Colonne de droite : aperçu.
+    auto controls = area.removeFromLeft (juce::jmax (300, area.getWidth() / 3));
+    area.removeFromLeft (16);
 
-    auto folderRow = area.removeFromTop (32);
-    browseButton.setBounds (folderRow.removeFromRight (130));
+    triggerButton.setBounds (controls.removeFromTop (72));
+    controls.removeFromTop (16);
+
+    auto folderRow = controls.removeFromTop (32);
+    browseButton.setBounds (folderRow.removeFromRight (120));
     folderRow.removeFromRight (8);
     folderLabel.setBounds (folderRow);
-    area.removeFromTop (16);
+    controls.removeFromTop (16);
 
-    logView.setBounds (area);
+    logView.setBounds (controls);
+
+    auto previewHeader = area.removeFromTop (28);
+    liveViewToggle.setBounds (previewHeader.removeFromRight (110));
+    previewCaption.setBounds (previewHeader);
+    area.removeFromTop (8);
+
+    previewArea = area;
+    previewView.setBounds (previewArea.reduced (6));
 }
 
 bool MainComponent::keyPressed (const juce::KeyPress& key)
@@ -106,7 +152,6 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
 void MainComponent::cameraStateChanged (CameraController::State newState,
                                         const juce::String& detail)
 {
-    const bool stateHasChanged = (newState != displayedState);
     displayedState = newState;
 
     statusLabel.setText (detail.isNotEmpty() ? detail : labelForState (newState),
@@ -114,8 +159,15 @@ void MainComponent::cameraStateChanged (CameraController::State newState,
 
     triggerButton.setEnabled (newState == CameraController::State::ready);
 
-    if (stateHasChanged && detail.isNotEmpty())
+    // Le moteur peut couper le Live View de lui-même (driver sans support) :
+    // on garde la case à cocher synchronisée.
+    liveViewToggle.setToggleState (controller.isLiveViewEnabled(), juce::dontSendNotification);
+
+    if (detail.isNotEmpty() && detail != lastLoggedDetail)
+    {
         appendLog (detail);
+        lastLoggedDetail = detail;
+    }
 
     repaint();
 }
@@ -124,6 +176,39 @@ void MainComponent::photoSaved (const juce::File& savedFile)
 {
     appendLog (utf8 ("Photo enregistrée : ") + savedFile.getFullPathName()
                + " (" + juce::File::descriptionOfSizeInBytes (savedFile.getSize()) + ")");
+
+    // Si le Live View tourne, il continue d'alimenter l'aperçu ; sinon on
+    // affiche la photo qui vient d'être capturée (si son format est décodable).
+    if (! controller.isLiveViewEnabled())
+        loadSavedPhotoPreview (savedFile);
+}
+
+void MainComponent::liveViewFrameReady (const juce::Image& frame)
+{
+    previewView.setImage (frame);
+}
+
+void MainComponent::loadSavedPhotoPreview (const juce::File& file)
+{
+    // Le décodage d'un JPEG 51 Mpx prend jusqu'à une seconde : il se fait hors
+    // du message thread pour ne pas geler l'UI. Les RAW (PEF/DNG) ne sont pas
+    // décodables par JUCE : loadFrom renvoie alors une image invalide et
+    // l'aperçu reste inchangé.
+    juce::Thread::launch ([safeThis = SafePointer<MainComponent> (this), file]
+    {
+        auto decoded = juce::ImageFileFormat::loadFrom (file);
+
+        if (decoded.isValid())   // safeThis n'est consulté que sur le message thread
+            juce::MessageManager::callAsync ([safeThis, decoded, file]
+            {
+                if (safeThis != nullptr && ! safeThis->controller.isLiveViewEnabled())
+                {
+                    safeThis->previewView.setImage (decoded);
+                    safeThis->previewCaption.setText (file.getFileName(),
+                                                      juce::dontSendNotification);
+                }
+            });
+    });
 }
 
 //==============================================================================

@@ -2,6 +2,7 @@
 
 #include <juce_core/juce_core.h>
 #include <juce_events/juce_events.h>
+#include <juce_graphics/juce_graphics.h>
 
 // Types opaques de libgphoto2 (évite d'exposer les en-têtes C dans toute l'app)
 typedef struct _Camera    Camera;
@@ -52,6 +53,9 @@ public:
 
         /** Toujours appelé sur le message thread, après écriture complète du fichier. */
         virtual void photoSaved (const juce::File& savedFile) = 0;
+
+        /** Nouvelle image Live View disponible. Toujours appelé sur le message thread. */
+        virtual void liveViewFrameReady (const juce::Image&) {}
     };
 
     CameraController();
@@ -62,6 +66,12 @@ public:
 
     /** Demande de déclenchement — non bloquant, latence minimale. */
     void triggerCapture();
+
+    /** Active/désactive le flux Live View (gp_camera_capture_preview).
+        Si le driver ne supporte pas l'aperçu, le flux se coupe tout seul et
+        l'état "Prêt" est renvoyé avec un message explicatif. */
+    void setLiveViewEnabled (bool shouldBeEnabled);
+    bool isLiveViewEnabled() const noexcept   { return liveViewOn.load(); }
 
     void setTargetDirectory (const juce::File& directory);
     juce::File getTargetDirectory() const;
@@ -80,7 +90,8 @@ private:
     void disconnectCamera();
     void performCaptureAndDownload();
     bool downloadFile (const char* cameraFolder, const char* cameraName, bool deleteAfter);
-    void pollCameraEvents();
+    void pollCameraEvents (int timeoutMs);
+    void grabLiveViewFrame();
 
     void setState (State newState, juce::String detail = {});
     void notifyPhotoSaved (const juce::File& file);
@@ -92,11 +103,13 @@ private:
 
     std::atomic<State> state { State::disconnected };
     std::atomic<bool>  captureRequested { false };
+    std::atomic<bool>  liveViewOn { false };
 
     mutable juce::CriticalSection dataLock;
     juce::File   targetDirectory;
     juce::String pendingDetail;
     juce::Array<juce::File> pendingSavedFiles;
+    juce::Image  pendingFrame;   // dernière image Live View (ref-comptée, copie triviale)
 
     juce::ListenerList<Listener> listeners;
 

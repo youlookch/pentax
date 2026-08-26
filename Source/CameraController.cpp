@@ -66,6 +66,12 @@ void CameraController::triggerCapture()
     }
 }
 
+void CameraController::setLiveViewEnabled (bool shouldBeEnabled)
+{
+    liveViewOn.store (shouldBeEnabled);
+    notify();   // démarre/arrête le flux sans attendre le prochain timeout
+}
+
 void CameraController::setTargetDirectory (const juce::File& directory)
 {
     const juce::ScopedLock sl (dataLock);
@@ -100,9 +106,23 @@ void CameraController::run()
         }
 
         if (captureRequested.exchange (false))
+        {
             performCaptureAndDownload();
+        }
+        else if (liveViewOn.load())
+        {
+            // gp_camera_capture_preview bloque le temps d'une trame : elle
+            // cadence naturellement la boucle. Le poll d'événements très court
+            // qui suit capte quand même FILE_ADDED / la déconnexion.
+            grabLiveViewFrame();
+
+            if (camera != nullptr && liveViewOn.load())
+                pollCameraEvents (1);
+        }
         else
-            pollCameraEvents();
+        {
+            pollCameraEvents (eventPollTimeoutMs);
+        }
     }
 
     disconnectCamera();
@@ -229,12 +249,12 @@ bool CameraController::downloadFile (const char* cameraFolder, const char* camer
 // depuis le boîtier). Le timeout court garantit une latence de déclenchement
 // bornée à eventPollTimeoutMs.
 //==============================================================================
-void CameraController::pollCameraEvents()
+void CameraController::pollCameraEvents (int timeoutMs)
 {
     CameraEventType eventType = GP_EVENT_UNKNOWN;
     void* eventData = nullptr;
 
-    const int ret = gp_camera_wait_for_event (camera, eventPollTimeoutMs,
+    const int ret = gp_camera_wait_for_event (camera, timeoutMs,
                                               &eventType, &eventData, context);
 
     if (ret < GP_OK)
@@ -256,6 +276,58 @@ void CameraController::pollCameraEvents()
 
     if (eventData != nullptr)
         free (eventData);   // libgphoto2 alloue eventData avec malloc
+}
+
+//==============================================================================
+// Live View : récupère une trame d'aperçu (JPEG basse résolution) depuis
+// l'appareil et la décode pour l'UI. La trame transite en RAM (quelques
+// centaines de Ko, contrairement aux RAW qui vont directement sur le disque).
+//==============================================================================
+void CameraController::grabLiveViewFrame()
+{
+    CameraFile* file = nullptr;
+    gp_file_new (&file);
+
+    const int ret = gp_camera_capture_preview (camera, file, context);
+
+    if (ret < GP_OK)
+    {
+        gp_file_free (file);
+
+        if (ret == GP_ERROR_IO || ret == GP_ERROR_IO_USB_FIND || ret == GP_ERROR_TIMEOUT)
+        {
+            // Le flux reprendra automatiquement à la reconnexion (le drapeau
+            // liveViewOn reste levé).
+            disconnectCamera();
+            setState (State::disconnected, utf8 ("Connexion USB perdue (câble débranché ?)"));
+        }
+        else
+        {
+            liveViewOn.store (false);
+            setState (State::ready, utf8 ("Live View indisponible sur cet appareil : ")
+                                        + gpError (ret));
+        }
+        return;
+    }
+
+    const char* data = nullptr;
+    unsigned long size = 0;
+    gp_file_get_data_and_size (file, &data, &size);
+
+    juce::Image frame;
+    if (data != nullptr && size > 0)
+        frame = juce::ImageFileFormat::loadFrom (data, (size_t) size);
+
+    gp_file_free (file);
+
+    if (frame.isValid())
+    {
+        {
+            const juce::ScopedLock sl (dataLock);
+            pendingFrame = frame;
+        }
+        triggerAsyncUpdate();
+    }
 }
 
 //==============================================================================
@@ -297,15 +369,21 @@ void CameraController::handleAsyncUpdate()
 {
     juce::String detail;
     juce::Array<juce::File> saved;
+    juce::Image frame;
     {
         const juce::ScopedLock sl (dataLock);
         detail = pendingDetail;
         saved.swapWith (pendingSavedFiles);
+        frame = pendingFrame;
+        pendingFrame = {};
     }
 
     const State current = state.load();
 
     listeners.call ([&] (Listener& l) { l.cameraStateChanged (current, detail); });
+
+    if (frame.isValid())
+        listeners.call ([&] (Listener& l) { l.liveViewFrameReady (frame); });
 
     for (const auto& f : saved)
         listeners.call ([&] (Listener& l) { l.photoSaved (f); });

@@ -1,0 +1,27 @@
+# Construit le .dmg macOS (Apple Silicon) à chaque push et sur demande.
+# Le DMG est publié comme artefact du run : onglet Actions -> run -> Artifacts.
+name: Build macOS DMG
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+jobs:
+  build-dmg:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer les dépendances
+        run: brew install cmake ninja pkg-config libgphoto2 dylibbundler
+
+      - name: Construire l'app et créer le DMG
+        run: ./scripts/make_dmg.sh
+
+      - name: Publier le DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: PentaxTether-dmg
+          path: dist/*.dmg
+          if-no-files-found: error

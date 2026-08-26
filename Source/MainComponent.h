@@ -7,6 +7,7 @@
 /**
     Interface de contrôle du tethering :
       - bouton principal "DÉCLENCHER" (raccourci : barre d'espace)
+      - aperçu : flux Live View de l'appareil et/ou dernière photo capturée
       - sélecteur de dossier de destination
       - indicateur d'état temps réel (pastille colorée + libellé)
       - journal des transferts
@@ -30,25 +31,32 @@ private:
     void cameraStateChanged (CameraController::State newState,
                              const juce::String& detail) override;
     void photoSaved (const juce::File& savedFile) override;
+    void liveViewFrameReady (const juce::Image& frame) override;
 
     void chooseTargetFolder();
+    void loadSavedPhotoPreview (const juce::File& file);
     void appendLog (const juce::String& line);
     static juce::Colour colourForState (CameraController::State);
     static juce::String labelForState (CameraController::State);
 
     CameraController controller;
 
-    juce::Label      titleLabel;
-    juce::Label      statusLabel;
-    juce::TextButton triggerButton;
-    juce::Label      folderLabel;
-    juce::TextButton browseButton;
-    juce::TextEditor logView;
+    juce::Label          titleLabel;
+    juce::Label          statusLabel;
+    juce::TextButton     triggerButton;
+    juce::Label          folderLabel;
+    juce::TextButton     browseButton;
+    juce::TextEditor     logView;
+    juce::ImageComponent previewView;
+    juce::ToggleButton   liveViewToggle;
+    juce::Label          previewCaption;
 
     std::unique_ptr<juce::FileChooser> folderChooser;
 
     CameraController::State displayedState = CameraController::State::disconnected;
+    juce::String lastLoggedDetail;
     juce::Rectangle<float> statusLedArea;
+    juce::Rectangle<int>   previewArea;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };
