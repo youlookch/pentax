@@ -109,12 +109,36 @@ Le script compile en Release puis rend le bundle **autonome** : les dylibs
 (`dylibbundler`), et les drivers `camlibs/`/`iolibs/` sont embarqués dans
 `Contents/Resources` (l'app les localise au démarrage via `CAMLIBS`/`IOLIBS`,
 voir `Source/Main.cpp`). Le DMG fonctionne donc sur un Mac **sans Homebrew**.
-La signature est ad-hoc : pour distribuer hors de votre machine sans
-avertissement Gatekeeper, re-signez avec votre Developer ID puis notarisez.
+Sans configuration supplémentaire la signature est ad-hoc : macOS affichera
+un avertissement Gatekeeper sur les machines qui **téléchargent** le DMG
+(contournable via Réglages Système → Confidentialité et sécurité → « Ouvrir
+quand même », ou `xattr -dr com.apple.quarantine "…/Pentax 645Z Tether.app"`).
+
+**Signature Developer ID + notarisation** (aucun avertissement) — le script
+les applique automatiquement si ces variables d'environnement sont posées :
+
+```bash
+export CODESIGN_IDENTITY="Developer ID Application: Votre Nom (TEAMID)"
+export APPLE_ID="vous@exemple.com"          # compte développeur Apple
+export APPLE_TEAM_ID="TEAMID"
+export APPLE_APP_PASSWORD="xxxx-xxxx-xxxx-xxxx"   # mot de passe d'app (account.apple.com)
+./scripts/make_dmg.sh
+```
 
 Le workflow GitHub Actions `.github/workflows/build-dmg.yml` produit ce même
 DMG sur un runner macOS à chaque push (artefact `PentaxTether-dmg` dans
-l'onglet *Actions*).
+l'onglet *Actions*). Pour qu'il signe et notarise, ajouter dans
+*Settings ▸ Secrets and variables ▸ Actions* du dépôt :
+
+| Secret | Contenu |
+|---|---|
+| `MACOS_CERTIFICATE` | export .p12 du certificat Developer ID Application, encodé en base64 (`base64 -i cert.p12 \| pbcopy`) |
+| `MACOS_CERTIFICATE_PWD` | mot de passe de l'export .p12 |
+| `APPLE_ID` | e-mail du compte développeur |
+| `APPLE_TEAM_ID` | identifiant d'équipe (10 caractères) |
+| `APPLE_APP_PASSWORD` | mot de passe d'app créé sur account.apple.com |
+
+Sans ces secrets, le workflow retombe sur la signature ad-hoc.
 
 > **Si l'appareil n'est pas détecté sur macOS** : le démon système
 > `ptpcamerad` (ou l'app Photos/Transfert d'images) peut monopoliser

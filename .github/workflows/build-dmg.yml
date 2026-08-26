@@ -16,7 +16,43 @@ jobs:
       - name: Installer les dépendances
         run: brew install cmake ninja pkg-config libgphoto2 dylibbundler
 
+      # Si les secrets de signature sont configurés dans le dépôt, importe le
+      # certificat Developer ID dans un trousseau temporaire et exporte
+      # CODESIGN_IDENTITY pour l'étape suivante. Sinon : signature ad-hoc.
+      - name: Importer le certificat Developer ID
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+        run: |
+          if [[ -z "$MACOS_CERTIFICATE" ]]; then
+            echo "Secret MACOS_CERTIFICATE absent : le DMG sera signé en ad-hoc."
+            exit 0
+          fi
+          KEYCHAIN_PWD="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PWD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PWD" build.keychain
+          security set-keychain-settings -lut 3600 build.keychain
+          echo "$MACOS_CERTIFICATE" | base64 --decode > cert.p12
+          security import cert.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" \
+                          -T /usr/bin/codesign
+          rm -f cert.p12
+          security set-key-partition-list -S apple-tool:,apple: -s \
+                          -k "$KEYCHAIN_PWD" build.keychain > /dev/null
+          IDENTITY="$(security find-identity -v -p codesigning build.keychain \
+                      | sed -n 's/.*"\(Developer ID Application[^"]*\)".*/\1/p' | head -1)"
+          if [[ -z "$IDENTITY" ]]; then
+            echo "Erreur : aucune identité 'Developer ID Application' dans le certificat importé." >&2
+            exit 1
+          fi
+          echo "Identité trouvée : $IDENTITY"
+          echo "CODESIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+
       - name: Construire l'app et créer le DMG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: ./scripts/make_dmg.sh
 
       - name: Publier le DMG
