@@ -1,4 +1,4 @@
-#include "CameraController.h"
+#include "GPhoto2Backend.h"
 
 #include <gphoto2/gphoto2-camera.h>
 #include <gphoto2/gphoto2-context.h>
@@ -31,75 +31,57 @@ namespace
 }
 
 //==============================================================================
-CameraController::CameraController()
+GPhoto2Backend::GPhoto2Backend()
     : juce::Thread ("Pentax USB Tether Thread")
 {
     context = gp_context_new();
-
-    targetDirectory = juce::File::getSpecialLocation (juce::File::userPicturesDirectory)
-                          .getChildFile ("Pentax645Z");
-    targetDirectory.createDirectory();
 }
 
-CameraController::~CameraController()
+GPhoto2Backend::~GPhoto2Backend()
 {
     signalThreadShouldExit();
     notify();
     stopThread (8000);           // laisse le temps de terminer un transfert en cours
-    cancelPendingUpdate();
 
     if (context != nullptr)
         gp_context_unref (context);
 }
 
-void CameraController::start()
+void GPhoto2Backend::start()
 {
     startThread (juce::Thread::Priority::high);
 }
 
-void CameraController::triggerCapture()
+void GPhoto2Backend::triggerCapture()
 {
-    if (state.load() == State::ready)
+    if (getState() == CameraState::ready)
     {
         captureRequested.store (true);
         notify();   // réveille immédiatement le thread USB
     }
 }
 
-void CameraController::setLiveViewEnabled (bool shouldBeEnabled)
+void GPhoto2Backend::setLiveViewEnabled (bool shouldBeEnabled)
 {
     liveViewOn.store (shouldBeEnabled);
     notify();   // démarre/arrête le flux sans attendre le prochain timeout
 }
 
-void CameraController::setTargetDirectory (const juce::File& directory)
-{
-    const juce::ScopedLock sl (dataLock);
-    targetDirectory = directory;
-    targetDirectory.createDirectory();
-}
-
-juce::File CameraController::getTargetDirectory() const
-{
-    const juce::ScopedLock sl (dataLock);
-    return targetDirectory;
-}
-
 //==============================================================================
 // Boucle du thread USB : connexion -> écoute d'événements -> capture à la demande
 //==============================================================================
-void CameraController::run()
+void GPhoto2Backend::run()
 {
     while (! threadShouldExit())
     {
         if (camera == nullptr)
         {
-            setState (State::connecting, utf8 ("Recherche du Pentax 645Z sur le bus USB..."));
+            setState (CameraState::connecting, utf8 ("Recherche du Pentax 645Z sur le bus USB..."));
 
             if (connectCamera())
                 continue;
 
-            setState (State::disconnected,
+            setState (CameraState::disconnected,
                       utf8 ("Aucun appareil détecté — nouvelle tentative dans 2 s"));
             wait (reconnectDelayMs);   // interrompu instantanément par notify()
             continue;
@@ -129,7 +111,7 @@ void CameraController::run()
 }
 
 //==============================================================================
-bool CameraController::connectCamera()
+bool GPhoto2Backend::connectCamera()
 {
     gp_camera_new (&camera);
 
@@ -149,11 +131,11 @@ bool CameraController::connectCamera()
     if (gp_camera_get_abilities (camera, &abilities) >= GP_OK)
         model = utf8 (abilities.model);
 
-    setState (State::ready, utf8 ("Prêt — ") + model);
+    setState (CameraState::ready, utf8 ("Prêt — ") + model);
     return true;
 }
 
-void CameraController::disconnectCamera()
+void GPhoto2Backend::disconnectCamera()
 {
     if (camera != nullptr)
     {
@@ -166,9 +148,9 @@ void CameraController::disconnectCamera()
 //==============================================================================
 // Déclenchement distant + rapatriement immédiat
 //==============================================================================
-void CameraController::performCaptureAndDownload()
+void GPhoto2Backend::performCaptureAndDownload()
 {
-    setState (State::capturing, utf8 ("Déclenchement en cours..."));
+    setState (CameraState::capturing, utf8 ("Déclenchement en cours..."));
 
     // Envoie l'opération PTP InitiateCapture : l'obturateur part immédiatement,
     // sans passer par la carte SD. La fonction rend la main dès que l'appareil
@@ -181,32 +163,32 @@ void CameraController::performCaptureAndDownload()
         if (ret == GP_ERROR_IO || ret == GP_ERROR_IO_USB_FIND || ret == GP_ERROR_TIMEOUT)
         {
             disconnectCamera();
-            setState (State::disconnected, utf8 ("Connexion USB perdue pendant le déclenchement"));
+            setState (CameraState::disconnected, utf8 ("Connexion USB perdue pendant le déclenchement"));
         }
         else
         {
-            setState (State::ready, utf8 ("Échec du déclenchement : ") + gpError (ret));
+            setState (CameraState::ready, utf8 ("Échec du déclenchement : ") + gpError (ret));
         }
         return;
     }
 
-    setState (State::transferring, utf8 ("Transfert de ") + utf8 (camPath.name) + "...");
+    setState (CameraState::transferring, utf8 ("Transfert de ") + utf8 (camPath.name) + "...");
 
     if (downloadFile (camPath.folder, camPath.name, true))
-        setState (State::ready, utf8 ("Prêt"));
+        setState (CameraState::ready, utf8 ("Prêt"));
 
     // En cas d'échec du transfert, downloadFile a déjà positionné l'état.
 }
 
-bool CameraController::downloadFile (const char* cameraFolder, const char* cameraName,
-                                     bool deleteAfter)
+bool GPhoto2Backend::downloadFile (const char* cameraFolder, const char* cameraName,
+                                   bool deleteAfter)
 {
     const juce::File target (makeUniqueTarget (utf8 (cameraName)));
 
     const int fd = openBinaryForWrite (target);
     if (fd < 0)
     {
-        setState (State::ready, utf8 ("Impossible d'écrire dans ") + target.getFullPathName());
+        setState (CameraState::ready, utf8 ("Impossible d'écrire dans ") + target.getFullPathName());
         return false;
     }
 
@@ -228,11 +210,11 @@ bool CameraController::downloadFile (const char* cameraFolder, const char* camer
         if (ret == GP_ERROR_IO || ret == GP_ERROR_IO_USB_FIND || ret == GP_ERROR_TIMEOUT)
         {
             disconnectCamera();
-            setState (State::disconnected, utf8 ("Connexion USB perdue pendant le transfert"));
+            setState (CameraState::disconnected, utf8 ("Connexion USB perdue pendant le transfert"));
         }
         else
         {
-            setState (State::ready, utf8 ("Échec du transfert : ") + gpError (ret));
+            setState (CameraState::ready, utf8 ("Échec du transfert : ") + gpError (ret));
         }
         return false;
     }
@@ -249,7 +231,7 @@ bool CameraController::downloadFile (const char* cameraFolder, const char* camer
 // depuis le boîtier). Le timeout court garantit une latence de déclenchement
 // bornée à eventPollTimeoutMs.
 //==============================================================================
-void CameraController::pollCameraEvents (int timeoutMs)
+void GPhoto2Backend::pollCameraEvents (int timeoutMs)
 {
     CameraEventType eventType = GP_EVENT_UNKNOWN;
     void* eventData = nullptr;
@@ -260,7 +242,7 @@ void CameraController::pollCameraEvents (int timeoutMs)
     if (ret < GP_OK)
     {
         disconnectCamera();
-        setState (State::disconnected, utf8 ("Connexion USB perdue (câble débranché ?)"));
+        setState (CameraState::disconnected, utf8 ("Connexion USB perdue (câble débranché ?)"));
         return;
     }
 
@@ -268,10 +250,10 @@ void CameraController::pollCameraEvents (int timeoutMs)
     {
         // Photo déclenchée depuis le boîtier : on la rapatrie aussi.
         const auto* path = static_cast<CameraFilePath*> (eventData);
-        setState (State::transferring, utf8 ("Transfert de ") + utf8 (path->name) + "...");
+        setState (CameraState::transferring, utf8 ("Transfert de ") + utf8 (path->name) + "...");
 
         if (downloadFile (path->folder, path->name, true))
-            setState (State::ready, utf8 ("Prêt"));
+            setState (CameraState::ready, utf8 ("Prêt"));
     }
 
     if (eventData != nullptr)
@@ -280,10 +262,9 @@ void CameraController::pollCameraEvents (int timeoutMs)
 
 //==============================================================================
 // Live View : récupère une trame d'aperçu (JPEG basse résolution) depuis
-// l'appareil et la décode pour l'UI. La trame transite en RAM (quelques
-// centaines de Ko, contrairement aux RAW qui vont directement sur le disque).
+// l'appareil et la décode pour l'UI.
 //==============================================================================
-void CameraController::grabLiveViewFrame()
+void GPhoto2Backend::grabLiveViewFrame()
 {
     CameraFile* file = nullptr;
     gp_file_new (&file);
@@ -299,13 +280,13 @@ void CameraController::grabLiveViewFrame()
             // Le flux reprendra automatiquement à la reconnexion (le drapeau
             // liveViewOn reste levé).
             disconnectCamera();
-            setState (State::disconnected, utf8 ("Connexion USB perdue (câble débranché ?)"));
+            setState (CameraState::disconnected, utf8 ("Connexion USB perdue (câble débranché ?)"));
         }
         else
         {
             liveViewOn.store (false);
-            setState (State::ready, utf8 ("Live View indisponible sur cet appareil : ")
-                                        + gpError (ret));
+            setState (CameraState::ready, utf8 ("Live View indisponible sur cet appareil : ")
+                                              + gpError (ret));
         }
         return;
     }
@@ -321,70 +302,5 @@ void CameraController::grabLiveViewFrame()
     gp_file_free (file);
 
     if (frame.isValid())
-    {
-        {
-            const juce::ScopedLock sl (dataLock);
-            pendingFrame = frame;
-        }
-        triggerAsyncUpdate();
-    }
-}
-
-//==============================================================================
-juce::File CameraController::makeUniqueTarget (const juce::String& cameraName) const
-{
-    const juce::File dir (getTargetDirectory());
-    dir.createDirectory();
-
-    juce::File target (dir.getChildFile (cameraName));
-    if (! target.existsAsFile())
-        return target;
-
-    return target.getNonexistentSibling();
-}
-
-//==============================================================================
-// Relais thread USB -> message thread
-//==============================================================================
-void CameraController::setState (State newState, juce::String detail)
-{
-    state.store (newState);
-    {
-        const juce::ScopedLock sl (dataLock);
-        pendingDetail = std::move (detail);
-    }
-    triggerAsyncUpdate();
-}
-
-void CameraController::notifyPhotoSaved (const juce::File& file)
-{
-    {
-        const juce::ScopedLock sl (dataLock);
-        pendingSavedFiles.add (file);
-    }
-    triggerAsyncUpdate();
-}
-
-void CameraController::handleAsyncUpdate()
-{
-    juce::String detail;
-    juce::Array<juce::File> saved;
-    juce::Image frame;
-    {
-        const juce::ScopedLock sl (dataLock);
-        detail = pendingDetail;
-        saved.swapWith (pendingSavedFiles);
-        frame = pendingFrame;
-        pendingFrame = {};
-    }
-
-    const State current = state.load();
-
-    listeners.call ([&] (Listener& l) { l.cameraStateChanged (current, detail); });
-
-    if (frame.isValid())
-        listeners.call ([&] (Listener& l) { l.liveViewFrameReady (frame); });
-
-    for (const auto& f : saved)
-        listeners.call ([&] (Listener& l) { l.photoSaved (f); });
+        notifyLiveViewFrame (frame);
 }

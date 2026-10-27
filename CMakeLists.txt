@@ -39,7 +39,9 @@ juce_add_gui_app(PentaxTether
 
 target_sources(PentaxTether PRIVATE
     Source/Main.cpp
-    Source/CameraController.cpp
+    Source/CameraBackendFactory.cpp
+    Source/GPhoto2Backend.cpp
+    Source/RicohSdkBackend.cpp
     Source/MainComponent.cpp
 )
 
@@ -63,3 +65,32 @@ target_link_libraries(PentaxTether
 # libgphoto2 est une lib C : ses en-têtes déclenchent des warnings avec les
 # flags stricts de JUCE ; on les inclut donc en "system includes".
 target_include_directories(PentaxTether SYSTEM PRIVATE ${GPHOTO2_INCLUDE_DIRS})
+
+# --- Backend officiel Ricoh (protocole natif Image Transmitter 2) ------------
+# Le "RICOH Camera USB SDK for C++" (645Z, K-1, K-1 II, KP) se télécharge sur
+# https://api.ricoh (acceptation de licence : il n'est pas redistribuable ici).
+# Pointer RICOH_CAMERA_SDK_ROOT vers la racine décompressée du SDK active ce
+# backend à la place de libgphoto2 :
+#   cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+#         -DRICOH_CAMERA_SDK_ROOT=$HOME/sdk/RicohCameraUSBSDK
+set(RICOH_CAMERA_SDK_ROOT "" CACHE PATH
+    "Racine du RICOH Camera USB SDK C++ (active la communication native IT2)")
+
+if(RICOH_CAMERA_SDK_ROOT)
+    find_library(RICOH_SDK_LIBRARY
+        NAMES RicohCameraSDKCpp ricoh_camera_sdk
+        PATHS "${RICOH_CAMERA_SDK_ROOT}/lib" "${RICOH_CAMERA_SDK_ROOT}/bin"
+        NO_DEFAULT_PATH)
+
+    if(NOT RICOH_SDK_LIBRARY)
+        message(FATAL_ERROR "RICOH_CAMERA_SDK_ROOT est défini mais la librairie "
+                            "RicohCameraSDKCpp est introuvable sous ${RICOH_CAMERA_SDK_ROOT}/lib")
+    endif()
+
+    target_compile_definitions(PentaxTether PRIVATE PENTAX_WITH_RICOH_SDK=1)
+    target_include_directories(PentaxTether SYSTEM PRIVATE "${RICOH_CAMERA_SDK_ROOT}/include")
+    target_link_libraries(PentaxTether PRIVATE ${RICOH_SDK_LIBRARY})
+    message(STATUS "Backend caméra : RICOH Camera USB SDK (${RICOH_SDK_LIBRARY})")
+else()
+    message(STATUS "Backend caméra : libgphoto2 (définir RICOH_CAMERA_SDK_ROOT pour le SDK officiel)")
+endif()

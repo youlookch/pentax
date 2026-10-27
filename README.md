@@ -22,15 +22,54 @@ Stack : **C++17 · JUCE 8 · libgphoto2** — compilable sur **macOS** (clang) e
 
 ```
 CMakeLists.txt              Configuration cross-platform (JUCE via FetchContent,
-                            libgphoto2 via pkg-config)
+                            libgphoto2 via pkg-config, SDK Ricoh optionnel)
 Source/
 ├── Main.cpp                Point d'entrée JUCE (fenêtre principale)
-├── MainComponent.h/.cpp    UI : bouton DÉCLENCHER, sélecteur de dossier,
-│                           indicateur d'état, journal des transferts
-└── CameraController.h/.cpp Moteur : thread USB dédié + wrapper libgphoto2
+├── MainComponent.h/.cpp    UI : bouton DÉCLENCHER, Live View, sélecteur de
+│                           dossier, indicateur d'état, journal des transferts
+├── CameraTypes.h           États + interface d'écoute UI (CameraListener)
+├── CameraBackend.h         Interface des moteurs + socle commun thread-safe
+├── CameraBackendFactory.cpp Choix du backend à la compilation
+├── GPhoto2Backend.h/.cpp   Backend libgphoto2 (PTP générique, par défaut)
+└── RicohSdkBackend.cpp     Backend SDK officiel Ricoh (protocole natif IT2)
 ```
 
-### Pipeline asynchrone (moteur `CameraController`)
+### Comment Image Transmitter 2 communique avec le 645Z
+
+IT2 dialogue avec le boîtier en **USB, via PTP** (le 645Z doit être réglé sur
+« Connexion USB : PTP »), enrichi d'**opcodes propriétaires Ricoh/Pentax**
+(classe 0x90xx : déclenchement, trames Live View, réglages). Il n'y a pas de
+transport SCSI pour le 645Z — le protocole SCSI (reverse-engineeré par
+pkTriggerCord) concerne les anciens reflex K en mode MSC et n'existe pas sur
+macOS.
+
+Ricoh expose officiellement cette même couche dans le **RICOH Camera USB SDK
+for C++** (v1.1.x) : détection/connexion, `startCapture`, Live View en flux
+poussé (`liveViewFrameUpdated`), rapatriement des images (`imageAdded` +
+`getData`), pour **645Z, K-1, K-1 II et KP**, sur macOS/Windows/Linux. C'est
+le backend recommandé de cette application : mêmes capacités qu'IT2, sans
+reverse-engineering ni zone grise de licence.
+
+### Choix du backend (à la compilation)
+
+| Backend | Quand | Capacités |
+|---|---|---|
+| **RICOH Camera USB SDK** | `-DRICOH_CAMERA_SDK_ROOT=<chemin>` | Protocole natif IT2 : capture, Live View poussé par l'appareil (~30 i/s), événements sans polling |
+| **libgphoto2** (défaut) | sans le SDK | PTP générique : capture + Live View par polling, selon le support du driver `ptp2` |
+
+Le SDK se télécharge sur `https://api.ricoh` (Products ▸ Camera SDK, licence à
+accepter — il n'est **pas redistribuable** avec ce dépôt). Décompressez-le puis :
+
+```bash
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DRICOH_CAMERA_SDK_ROOT=$HOME/sdk/RicohCameraUSBSDK
+```
+
+À l'exécution, la dylib du SDK (`libRicohCameraSDKCpp`) doit être trouvable
+(copiez-la à côté de l'exécutable ou dans le bundle ; `scripts/make_dmg.sh`
+l'embarque via dylibbundler comme les autres).
+
+### Pipeline asynchrone
 
 libgphoto2 n'est **pas thread-safe** : un unique thread USB haute priorité
 (`juce::Thread`) possède la session `Camera*` du début à la fin. L'UI ne fait

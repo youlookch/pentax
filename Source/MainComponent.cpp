@@ -24,10 +24,10 @@ MainComponent::MainComponent()
     triggerButton.setEnabled (false);
     triggerButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xffb3261e));
     triggerButton.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
-    triggerButton.onClick = [this] { controller.triggerCapture(); };
+    triggerButton.onClick = [this] { controller->triggerCapture(); };
     addAndMakeVisible (triggerButton);
 
-    folderLabel.setText (controller.getTargetDirectory().getFullPathName(), juce::dontSendNotification);
+    folderLabel.setText (controller->getTargetDirectory().getFullPathName(), juce::dontSendNotification);
     folderLabel.setFont (juce::FontOptions (14.0f));
     folderLabel.setColour (juce::Label::backgroundColourId, juce::Colours::black.withAlpha (0.25f));
     folderLabel.setJustificationType (juce::Justification::centredLeft);
@@ -50,7 +50,7 @@ MainComponent::MainComponent()
     liveViewToggle.setButtonText (utf8 ("Live View"));
     liveViewToggle.onClick = [this]
     {
-        controller.setLiveViewEnabled (liveViewToggle.getToggleState());
+        controller->setLiveViewEnabled (liveViewToggle.getToggleState());
         previewCaption.setText (liveViewToggle.getToggleState()
                                     ? utf8 ("Live View")
                                     : utf8 ("Aperçu"),
@@ -63,17 +63,18 @@ MainComponent::MainComponent()
     previewCaption.setJustificationType (juce::Justification::centredLeft);
     addAndMakeVisible (previewCaption);
 
+    appendLog (utf8 ("Moteur caméra : ") + controller->getBackendName());
     appendLog (utf8 ("En attente de l'appareil. Branchez le 645Z en USB (mode PTP) et allumez-le."));
 
-    controller.addListener (this);
-    controller.start();
+    controller->addListener (this);
+    controller->start();
 
     setSize (1000, 620);
 }
 
 MainComponent::~MainComponent()
 {
-    controller.removeListener (this);
+    controller->removeListener (this);
 }
 
 //==============================================================================
@@ -142,14 +143,14 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
 {
     if (key == juce::KeyPress::spaceKey)
     {
-        controller.triggerCapture();
+        controller->triggerCapture();
         return true;
     }
     return false;
 }
 
 //==============================================================================
-void MainComponent::cameraStateChanged (CameraController::State newState,
+void MainComponent::cameraStateChanged (CameraState newState,
                                         const juce::String& detail)
 {
     displayedState = newState;
@@ -157,11 +158,11 @@ void MainComponent::cameraStateChanged (CameraController::State newState,
     statusLabel.setText (detail.isNotEmpty() ? detail : labelForState (newState),
                          juce::dontSendNotification);
 
-    triggerButton.setEnabled (newState == CameraController::State::ready);
+    triggerButton.setEnabled (newState == CameraState::ready);
 
     // Le moteur peut couper le Live View de lui-même (driver sans support) :
     // on garde la case à cocher synchronisée.
-    liveViewToggle.setToggleState (controller.isLiveViewEnabled(), juce::dontSendNotification);
+    liveViewToggle.setToggleState (controller->isLiveViewEnabled(), juce::dontSendNotification);
 
     if (detail.isNotEmpty() && detail != lastLoggedDetail)
     {
@@ -179,7 +180,7 @@ void MainComponent::photoSaved (const juce::File& savedFile)
 
     // Si le Live View tourne, il continue d'alimenter l'aperçu ; sinon on
     // affiche la photo qui vient d'être capturée (si son format est décodable).
-    if (! controller.isLiveViewEnabled())
+    if (! controller->isLiveViewEnabled())
         loadSavedPhotoPreview (savedFile);
 }
 
@@ -201,7 +202,7 @@ void MainComponent::loadSavedPhotoPreview (const juce::File& file)
         if (decoded.isValid())   // safeThis n'est consulté que sur le message thread
             juce::MessageManager::callAsync ([safeThis, decoded, file]
             {
-                if (safeThis != nullptr && ! safeThis->controller.isLiveViewEnabled())
+                if (safeThis != nullptr && ! safeThis->controller->isLiveViewEnabled())
                 {
                     safeThis->previewView.setImage (decoded);
                     safeThis->previewCaption.setText (file.getFileName(),
@@ -216,7 +217,7 @@ void MainComponent::chooseTargetFolder()
 {
     folderChooser = std::make_unique<juce::FileChooser> (
         utf8 ("Choisir le dossier de destination"),
-        controller.getTargetDirectory());
+        controller->getTargetDirectory());
 
     folderChooser->launchAsync (juce::FileBrowserComponent::openMode
                                     | juce::FileBrowserComponent::canSelectDirectories,
@@ -225,7 +226,7 @@ void MainComponent::chooseTargetFolder()
                                     const auto dir = fc.getResult();
                                     if (dir.isDirectory() || dir != juce::File())
                                     {
-                                        controller.setTargetDirectory (dir);
+                                        controller->setTargetDirectory (dir);
                                         folderLabel.setText (dir.getFullPathName(),
                                                              juce::dontSendNotification);
                                         appendLog (utf8 ("Dossier cible : ") + dir.getFullPathName());
@@ -240,30 +241,28 @@ void MainComponent::appendLog (const juce::String& line)
     logView.insertTextAtCaret (time + line + juce::newLine);
 }
 
-juce::Colour MainComponent::colourForState (CameraController::State s)
+juce::Colour MainComponent::colourForState (CameraState s)
 {
-    using State = CameraController::State;
-    switch (s)
+        switch (s)
     {
-        case State::ready:        return juce::Colour (0xff2e9e4f);   // vert
-        case State::capturing:    return juce::Colour (0xffe8a13a);   // orange
-        case State::transferring: return juce::Colour (0xff3a7be8);   // bleu
-        case State::connecting:   return juce::Colour (0xffb9b93a);   // jaune
-        case State::disconnected: break;
+        case CameraState::ready:        return juce::Colour (0xff2e9e4f);   // vert
+        case CameraState::capturing:    return juce::Colour (0xffe8a13a);   // orange
+        case CameraState::transferring: return juce::Colour (0xff3a7be8);   // bleu
+        case CameraState::connecting:   return juce::Colour (0xffb9b93a);   // jaune
+        case CameraState::disconnected: break;
     }
     return juce::Colour (0xff9e2e2e);                                 // rouge
 }
 
-juce::String MainComponent::labelForState (CameraController::State s)
+juce::String MainComponent::labelForState (CameraState s)
 {
-    using State = CameraController::State;
-    switch (s)
+        switch (s)
     {
-        case State::ready:        return utf8 ("Prêt");
-        case State::capturing:    return utf8 ("Déclenchement en cours...");
-        case State::transferring: return utf8 ("Transfert...");
-        case State::connecting:   return utf8 ("Connexion...");
-        case State::disconnected: break;
+        case CameraState::ready:        return utf8 ("Prêt");
+        case CameraState::capturing:    return utf8 ("Déclenchement en cours...");
+        case CameraState::transferring: return utf8 ("Transfert...");
+        case CameraState::connecting:   return utf8 ("Connexion...");
+        case CameraState::disconnected: break;
     }
     return utf8 ("Déconnecté");
 }
