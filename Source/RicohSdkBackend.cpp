@@ -96,7 +96,7 @@ private:
 
         void liveViewFrameUpdated (const std::shared_ptr<const CameraDevice>&,
                                    const std::shared_ptr<const unsigned char>& frameData,
-                                   uint64_t frameSize) override
+                                   unsigned long frameSize) override
         {
             if (frameData == nullptr || frameSize == 0)
                 return;
