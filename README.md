@@ -54,20 +54,30 @@ reverse-engineering ni zone grise de licence.
 
 | Backend | Quand | Capacités |
 |---|---|---|
-| **RICOH Camera USB SDK** | `-DRICOH_CAMERA_SDK_ROOT=<chemin>` | Protocole natif IT2 : capture, Live View poussé par l'appareil (~30 i/s), événements sans polling |
+| **RICOH Camera USB SDK** | Linux : automatique (SDK vendorisé) ; ailleurs : `-DRICOH_CAMERA_SDK_ROOT=<chemin>` | Protocole natif IT2 : capture, Live View poussé par l'appareil (~30 i/s), événements sans polling |
 | **libgphoto2** (défaut) | sans le SDK | PTP générique : capture + Live View par polling, selon le support du driver `ptp2` |
 
-Le SDK se télécharge sur `https://api.ricoh` (Products ▸ Camera SDK, licence à
-accepter — il n'est **pas redistribuable** avec ce dépôt). Décompressez-le puis :
+**Le portail développeur de Ricoh (api.ricoh) a fermé : le SDK n'est plus
+téléchargeable officiellement.** Ce dépôt vendorise donc la copie
+redistribuable maintenue par le projet INDI
+(`third_party/libricohcamerasdk` : en-têtes officiels v1.1.0 + libs Linux
+x64/x86/armv7l + licence Ricoh, dont le §2.1(b) autorise la distribution des
+libs avec l'application) :
 
-```bash
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-      -DRICOH_CAMERA_SDK_ROOT=$HOME/sdk/RicohCameraUSBSDK
-```
-
-À l'exécution, la dylib du SDK (`libRicohCameraSDKCpp`) doit être trouvable
-(copiez-la à côté de l'exécutable ou dans le bundle ; `scripts/make_dmg.sh`
-l'embarque via dylibbundler comme les autres).
+- **Linux** : rien à faire — CMake détecte le SDK vendorisé et le backend
+  natif est compilé et lié automatiquement (règle udev fournie :
+  `third_party/libricohcamerasdk/99-pentax.rules`).
+- **macOS / Windows** : Ricoh n'a jamais publié ces libs ailleurs que sur son
+  portail, et aucune copie redistribuable n'est connue. Si vous possédez une
+  archive du SDK officiel pour votre plateforme, pointez
+  `-DRICOH_CAMERA_SDK_ROOT=<racine décompressée>` et le backend natif se
+  compile tel quel (signatures déjà validées contre les en-têtes v1.1.0).
+  Sinon, l'application retombe sur **libgphoto2** : comme notre backend
+  n'utilise que l'API générique (`gp_camera_capture`,
+  `gp_camera_capture_preview`, `gp_camera_wait_for_event`), il hérite
+  automatiquement du niveau de support Pentax de la libgphoto2 installée —
+  installer/compiler une libgphoto2 dont le driver `ptp2` prend en charge le
+  645Z suffit, sans toucher au code de l'app.
 
 ### Pipeline asynchrone
 

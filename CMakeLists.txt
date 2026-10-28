@@ -67,30 +67,72 @@ target_link_libraries(PentaxTether
 target_include_directories(PentaxTether SYSTEM PRIVATE ${GPHOTO2_INCLUDE_DIRS})
 
 # --- Backend officiel Ricoh (protocole natif Image Transmitter 2) ------------
-# Le "RICOH Camera USB SDK for C++" (645Z, K-1, K-1 II, KP) se télécharge sur
-# https://api.ricoh (acceptation de licence : il n'est pas redistribuable ici).
-# Pointer RICOH_CAMERA_SDK_ROOT vers la racine décompressée du SDK active ce
-# backend à la place de libgphoto2 :
-#   cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-#         -DRICOH_CAMERA_SDK_ROOT=$HOME/sdk/RicohCameraUSBSDK
+# Le "RICOH Camera USB SDK for C++" (645Z, K-1, K-1 II, KP) n'est plus
+# distribué par Ricoh (portail api.ricoh fermé). Le dépôt vendorise donc la
+# copie redistribuable du projet INDI (third_party/libricohcamerasdk :
+# en-têtes officiels v1.1.0 + libs Linux x64/x86/armv7l, licence Ricoh §2.1
+# autorisant la distribution avec l'application).
+#   - Linux : le SDK vendorisé est utilisé automatiquement.
+#   - Autre plateforme ou autre copie du SDK : -DRICOH_CAMERA_SDK_ROOT=<racine>.
+#   - macOS/Windows sans SDK : backend libgphoto2 (voir README).
 set(RICOH_CAMERA_SDK_ROOT "" CACHE PATH
     "Racine du RICOH Camera USB SDK C++ (active la communication native IT2)")
 
-if(RICOH_CAMERA_SDK_ROOT)
+set(_ricoh_root "${RICOH_CAMERA_SDK_ROOT}")
+set(_ricoh_vendored "${CMAKE_CURRENT_SOURCE_DIR}/third_party/libricohcamerasdk")
+
+if(NOT _ricoh_root AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64)$")
+        set(_ricoh_arch "x64")
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^i[3-6]86$")
+        set(_ricoh_arch "x86")
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^armv7")
+        set(_ricoh_arch "armv7l")
+    endif()
+
+    if(DEFINED _ricoh_arch)
+        # Les .bin d'INDI sont des .so : on les met au nom attendu par l'éditeur
+        # de liens dans le répertoire de build.
+        set(_ricoh_libdir "${CMAKE_BINARY_DIR}/ricoh_sdk_lib")
+        file(MAKE_DIRECTORY "${_ricoh_libdir}")
+        file(COPY_FILE "${_ricoh_vendored}/lib/${_ricoh_arch}/libRicohCameraSDKCpp.bin"
+                       "${_ricoh_libdir}/libRicohCameraSDKCpp.so" ONLY_IF_DIFFERENT)
+        file(COPY_FILE "${_ricoh_vendored}/lib/${_ricoh_arch}/libmtpricoh.bin"
+                       "${_ricoh_libdir}/libmtpricoh.so.9" ONLY_IF_DIFFERENT)
+
+        target_compile_definitions(PentaxTether PRIVATE PENTAX_WITH_RICOH_SDK=1)
+        target_include_directories(PentaxTether SYSTEM PRIVATE "${_ricoh_vendored}/include")
+        # libmtpricoh est lié explicitement : le RUNPATH de l'exécutable ne
+        # s'applique pas aux dépendances transitives de la lib SDK.
+        target_link_libraries(PentaxTether PRIVATE
+            "${_ricoh_libdir}/libRicohCameraSDKCpp.so"
+            "${_ricoh_libdir}/libmtpricoh.so.9")
+        set_target_properties(PentaxTether PROPERTIES
+            BUILD_RPATH "${_ricoh_libdir}"
+            INSTALL_RPATH "$ORIGIN")
+        # DT_RPATH (et non RUNPATH) : le chemin vaut aussi pour la dépendance
+        # transitive libmtpricoh.so.9 de la lib SDK.
+        target_link_options(PentaxTether PRIVATE "-Wl,--disable-new-dtags")
+        message(STATUS "Backend caméra : RICOH Camera USB SDK vendorisé (${_ricoh_arch})")
+        set(_ricoh_done TRUE)
+    endif()
+endif()
+
+if(_ricoh_root)
     find_library(RICOH_SDK_LIBRARY
         NAMES RicohCameraSDKCpp ricoh_camera_sdk
-        PATHS "${RICOH_CAMERA_SDK_ROOT}/lib" "${RICOH_CAMERA_SDK_ROOT}/bin"
+        PATHS "${_ricoh_root}/lib" "${_ricoh_root}/bin"
         NO_DEFAULT_PATH)
 
     if(NOT RICOH_SDK_LIBRARY)
         message(FATAL_ERROR "RICOH_CAMERA_SDK_ROOT est défini mais la librairie "
-                            "RicohCameraSDKCpp est introuvable sous ${RICOH_CAMERA_SDK_ROOT}/lib")
+                            "RicohCameraSDKCpp est introuvable sous ${_ricoh_root}/lib")
     endif()
 
     target_compile_definitions(PentaxTether PRIVATE PENTAX_WITH_RICOH_SDK=1)
-    target_include_directories(PentaxTether SYSTEM PRIVATE "${RICOH_CAMERA_SDK_ROOT}/include")
+    target_include_directories(PentaxTether SYSTEM PRIVATE "${_ricoh_root}/include")
     target_link_libraries(PentaxTether PRIVATE ${RICOH_SDK_LIBRARY})
     message(STATUS "Backend caméra : RICOH Camera USB SDK (${RICOH_SDK_LIBRARY})")
-else()
-    message(STATUS "Backend caméra : libgphoto2 (définir RICOH_CAMERA_SDK_ROOT pour le SDK officiel)")
+elseif(NOT _ricoh_done)
+    message(STATUS "Backend caméra : libgphoto2 (SDK Ricoh indisponible sur cette plateforme)")
 endif()
